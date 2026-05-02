@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Crystal Battle: Tactical AI Edition</title>
+    <style>
+        body { margin:0; overflow:hidden; background:#050505; color:white; font-family: 'Segoe UI', sans-serif; user-select: none; }
+        canvas { display:block; }
+        #overlay, #shop-ui, #confirm-ui { position:fixed; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.95); display:flex; flex-direction:column; justify-content:center; align-items:center; z-index:200; }
+        #shop-ui, #confirm-ui { display: none; z-index: 250; }
+        .menu-box { background:#111; padding:30px; border:2px solid #00d4ff; border-radius:15px; text-align:center; width:500px; box-shadow: 0 0 30px rgba(0,212,255,0.4); }
+        .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin: 15px 0; }
+        .btn { background:#222; color:white; border:1px solid #444; padding:12px; cursor:pointer; font-size:14px; border-radius:6px; transition: 0.2s; }
+        .btn:hover, .btn.active { background:#00d4ff; color:black; border-color: white; font-weight: bold; }
+        #hud { position:fixed; top:20px; left:50%; transform:translateX(-50%); display:flex; gap:10px; z-index:100; pointer-events:none; }
+        .stat { background:rgba(0,0,0,0.8); padding:10px 15px; border:1px solid #00d4ff; border-radius:8px; font-size:18px; min-width: 100px; text-align: center; }
+        #exit-btn { position: fixed; top: 20px; right: 20px; z-index: 180; padding: 10px 20px; background: rgba(255,0,0,0.2); border: 1px solid #ff4444; color: #ff4444; cursor: pointer; border-radius: 5px; font-weight: bold; }
+        #radar { position: fixed; bottom: 20px; left: 20px; width: 150px; height: 150px; background: rgba(0, 20, 40, 0.85); border: 2px solid #00d4ff; border-radius: 50%; z-index: 100; box-shadow: 0 0 15px #00d4ff; pointer-events: none; }
+        #author-tag { position: fixed; bottom: 20px; right: 20px; font-size: 14px; color: rgba(0, 212, 255, 0.6); letter-spacing: 1px; text-transform: uppercase; pointer-events: none; z-index: 100; }
+        .high-score { color: #ffd700; font-size: 20px; margin-bottom: 15px; }
+    </style>
+</head>
+<body>
+
+<button id="exit-btn" onclick="showConfirm()">В МЕНЮ</button>
+<div id="author-tag">by Кирилл Пьяничук</div>
+
+<div id="confirm-ui">
+    <div class="menu-box">
+        <h2 style="color:#ff4444;">ВЫЙТИ В МЕНЮ?</h2>
+        <p>Весь текущий прогресс будет потерян!</p>
+        <div style="display: flex; gap: 20px; justify-content: center; margin-top: 20px;">
+            <button class="btn" style="background:#ff4444; width: 100px;" onclick="location.reload()">ДА</button>
+            <button class="btn" style="width: 100px;" onclick="hideConfirm()">НЕТ</button>
+        </div>
+    </div>
+</div>
+
+<div id="shop-ui" onclick="toggleShop()">
+    <div class="menu-box" onclick="event.stopPropagation()">
+        <h2 style="color:#ffd700;">МАГАЗИН [B]</h2>
+        <div class="grid">
+            <button class="btn" onclick="buyItem('medkit')">Аптечка $500</button>
+            <button class="btn" onclick="buyItem('grenade')">ГРАНАТА $400</button>
+            <button class="btn" onclick="buyWeapon('ak47')">AK-47 $2500</button>
+            <button class="btn" onclick="buyWeapon('m4a1')">M4A1 $3100</button>
+        </div>
+        <p>Деньги: <span id="shop-money" style="color:#0f0;">$0</span></p>
+        <button class="btn" style="width:100%" onclick="toggleShop()">ЗАКРЫТЬ</button>
+    </div>
+</div>
+
+<div id="overlay">
+    <div class="menu-box">
+        <h1 style="color:#00d4ff;">CRYSTAL BATTLE</h1>
+        <div class="high-score">РЕКОРД: $<span id="best-score">0</span></div>
+        <p>Выберите карту:</p>
+        <div class="grid">
+            <button class="btn active" onclick="setMap(0, this)">АНГАР</button>
+            <button class="btn" onclick="setMap(1, this)">ЛАБИРИНТ</button>
+            <button class="btn" onclick="setMap(2, this)">АРЕНА</button>
+        </div>
+        <p>Сложность:</p>
+        <div class="grid">
+            <button class="btn" onclick="setDiff(1, 3, this)">НУБ</button>
+            <button class="btn active" onclick="setDiff(2, 7, this)">ПРО</button>
+            <button class="btn" onclick="setDiff(4, 15, this)">АС</button>
+        </div>
+        <button class="btn" style="background:#00d4ff; color:black; width:100%; font-size:20px; margin-top:20px;" onclick="start()">ИГРАТЬ</button>
+    </div>
+</div>
+
+<div id="hud">
+    <div class="stat" style="color:#ffd700">$<span id="money">0</span></div>
+    <div class="stat" style="color:#0f0">HP: <span id="hp-val">100</span></div>
+    <div class="stat" style="color:#ff9d00">💣: <span id="gren-val">0</span></div>
+    <div class="stat" id="weapon-display" style="color:#fff">Pistol</div>
+</div>
+
+<canvas id="radar"></canvas>
+<canvas id="c"></canvas>
+
+<script>
+const canvas = document.getElementById("c"), ctx = canvas.getContext("2d");
+const rCanvas = document.getElementById("radar"), rCtx = rCanvas.getContext("2d");
+let world = { w: 3000, h: 2000 };
+
+const WEAPONS = {
+    pistol: { damage: 25, rate: 450, bSpeed: 20, color: "#999", name: "Pistol", freq: 200 },
+    ak47:   { damage: 40, rate: 140, bSpeed: 28, color: "#8B4513", name: "AK-47", freq: 150 },
+    m4a1:   { damage: 28, rate: 90,  bSpeed: 35, color: "#4B5320", name: "M4A1", freq: 300 }
+};
+
+let player = { x:500, y:500, hp:100, team:'T', angle:0, alive:false, money: 800, weapon: 'pistol', lastShot: 0, grenades: 1, radius: 20 };
+let entities = [], bullets = [], walls = [], grenades = [], particles = [], keys = {}, running = false;
+let audioCtx, currentMap = 0, difficulty = 2, botCount = 7, isShopOpen = false;
+
+let bestScore = localStorage.getItem('crystalHighScore') || 0;
+document.getElementById('best-score').innerText = bestScore;
+
+function showConfirm() { document.getElementById('confirm-ui').style.display = 'flex'; }
+function hideConfirm() { document.getElementById('confirm-ui').style.display = 'none'; }
+
+function playSound(freq, type, duration, vol) {
+    if(!audioCtx) return;
+    try {
+        if(audioCtx.state === 'suspended') audioCtx.resume();
+        let osc = audioCtx.createOscillator(), gain = audioCtx.createGain();
+        osc.type = type; osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(vol, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + duration);
+        osc.connect(gain); gain.connect(audioCtx.destination);
+        osc.start(); osc.stop(audioCtx.currentTime + duration);
+    } catch(e) {}
+}
+
+function setMap(m, b) { currentMap = m; selectBtn(b); }
+function setDiff(d, c, b) { difficulty = d; botCount = c; selectBtn(b); }
+function selectBtn(b) { [...b.parentElement.children].forEach(x => x.classList.remove('active')); b.classList.add('active'); }
+
+function start() {
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    document.getElementById("overlay").style.display = "none";
+    
+    if(currentMap === 0) walls = [{x:1400,y:400,w:200,h:1200}, {x:400,y:900,w:2200,h:100}];
+    else if(currentMap === 1) walls = [{x:800,y:0,w:100,h:1500}, {x:1600,y:500,w:100,h:1500}, {x:0,y:1000,w:600,h:100}];
+    else walls = [{x:500,y:500,w:100,h:100}, {x:2400,y:500,w:100,h:100}, {x:500,y:1400,w:100,h:100}, {x:2400,y:1400,w:100,h:100}, {x:1450,y:950,w:100,h:100}];
+    
+    walls.push({x:0,y:0,w:2,h:world.h}, {x:world.w,y:0,w:2,h:world.h}, {x:0,y:0,w:world.w,h:2}, {x:0,y:world.h,w:world.w,h:2});
+
+    player.alive = true; player.hp = 100; player.x = 200; player.y = 200; player.money = 800; player.grenades = 1;
+    entities = []; bullets = []; grenades = []; particles = [];
+    spawnWave();
+    running = true;
+    updateHUD();
+    requestAnimationFrame(loop);
+}
+
+function spawnWave() {
+    for(let i=0; i < botCount; i++) {
+        entities.push({
+            x: 1000 + Math.random()*(world.w-1200), y: 200 + Math.random()*(world.h-400),
+            hp: 100, team: 'CT', angle: 0, alive: true, lastShot: 0, radius: 20,
+            tacticTimer: 0, strafeDir: Math.random() > 0.5 ? 1 : -1, isAlerted: false, lastKnownPos: null
+        });
+    }
+}
+
+function checkWallCollision(obj) {
+    let hit = false;
+    walls.forEach(w => {
+        let closestX = Math.max(w.x, Math.min(obj.x, w.x + w.w));
+        let closestY = Math.max(w.y, Math.min(obj.y, w.y + w.h));
+        let dx = obj.x - closestX, dy = obj.y - closestY;
+        let distance = Math.sqrt(dx*dx + dy*dy);
+        if (distance < obj.radius) {
+            let overlap = obj.radius - distance;
+            obj.x += (dx / distance) * overlap;
+            obj.y += (dy / distance) * overlap;
+            hit = true;
+        }
+    });
+    return hit;
+}
+
+// Система проверки видимости "через лучи"[cite: 1]
+function canSeeTarget(bot, target) {
+    let dx = target.x - bot.x, dy = target.y - bot.y;
+    let dist = Math.hypot(dx, dy);
+    let steps = dist / 15;
+    for (let i = 1; i < steps; i++) {
+        let cx = bot.x + (dx / steps) * i, cy = bot.y + (dy / steps) * i;
+        for (let w of walls) {
+            if (cx > w.x && cx < w.x + w.w && cy > w.y && cy < w.y + w.h) return false;
+        }
+    }
+    return true;
+}
+
+function updateRadar() {
+    rCanvas.width = 150; rCanvas.height = 150;
+    rCtx.translate(75, 75);
+    let scale = 0.05;
+    rCtx.strokeStyle = "rgba(0, 212, 255, 0.3)";
+    walls.forEach(w => rCtx.strokeRect((w.x - player.x) * scale, (w.y - player.y) * scale, w.w * scale, w.h * scale));
+    rCtx.fillStyle = "white"; rCtx.beginPath(); rCtx.arc(0, 0, 3, 0, 7); rCtx.fill();
+    entities.forEach(e => {
+        if(!e.alive) return;
+        let dx = (e.x - player.x) * scale, dy = (e.y - player.y) * scale;
+        if(Math.hypot(dx, dy) < 70) { rCtx.fillStyle = "#ff4444"; rCtx.beginPath(); rCtx.arc(dx, dy, 2.5, 0, 7); rCtx.fill(); }
+    });
+}
+
+function throwGrenade() {
+    if(player.alive && player.grenades > 0) {
+        player.grenades--;
+        grenades.push({ x: player.x, y: player.y, vx: Math.cos(player.angle)*15, vy: Math.sin(player.angle)*15, timer: 90 });
+        updateHUD(); playSound(400, 'sine', 0.1, 0.1);
+    }
+}
+
+function update() {
+    if(!running || isShopOpen || document.getElementById('confirm-ui').style.display === 'flex') return;
+    canvas.width = window.innerWidth; canvas.height = window.innerHeight;
+
+    let nx = player.x, ny = player.y;
+    if(keys['KeyW']) ny -= 7; if(keys['KeyS']) ny += 7;
+    if(keys['KeyA']) nx -= 7; if(keys['KeyD']) nx += 7;
+    player.x = nx; player.y = ny;
+    checkWallCollision(player);
+
+    if(keys['MouseDown'] && player.alive) {
+        let w = WEAPONS[player.weapon];
+        if(Date.now() - player.lastShot > w.rate) {
+            bullets.push({x: player.x, y: player.y, vx: Math.cos(player.angle)*w.bSpeed, vy: Math.sin(player.angle)*w.bSpeed, team: 'T', damage: w.damage});
+            player.lastShot = Date.now(); playSound(w.freq, 'square', 0.1, 0.05);
+        }
+    }
+
+    // Бесконечный спавн волн: чистим массив если все мертвы[cite: 1]
+    if(entities.length === 0 || entities.every(e => !e.alive)) { 
+        entities = []; 
+        spawnWave(); 
+        player.money += 1000; 
+        updateHUD(); 
+    }
+
+    // Интеллектуальное поведение ботов[cite: 1]
+    entities.forEach(b => {
+        if(!b.alive) return;
+        let dist = Math.hypot(player.x - b.x, player.y - b.y);
+        let visible = canSeeTarget(b, player);
+
+        if (visible) {
+            b.angle = Math.atan2(player.y - b.y, player.x - b.x);
+            b.isAlerted = true; 
+            b.lastKnownPos = { x: player.x, y: player.y };
+
+            // Тактический стрейф (маневрирование)[cite: 1]
+            b.tacticTimer--;
+            if (b.tacticTimer <= 0) { 
+                b.strafeDir *= -1; 
+                b.tacticTimer = 40 + Math.random() * 60; 
+            }
+
+            // Дистанция боя
+            if (dist > 400) { 
+                b.x += Math.cos(b.angle) * (2 + difficulty * 0.3); 
+                b.y += Math.sin(b.angle) * (2 + difficulty * 0.3); 
+            } else if (dist < 250) { 
+                b.x -= Math.cos(b.angle) * 2; 
+                b.y -= Math.sin(b.angle) * 2; 
+            }
+
+            // Само движение боком
+            let sideAngle = b.angle + Math.PI/2;
+            b.x += Math.cos(sideAngle) * b.strafeDir * (1.5 + difficulty * 0.4);
+            b.y += Math.sin(sideAngle) * b.strafeDir * (1.5 + difficulty * 0.4);
+
+            // Огонь ведется только если бот видит игрока[cite: 1]
+            if(dist < 600 && Math.random() < 0.02 * difficulty) {
+                bullets.push({x: b.x, y: b.y, vx: Math.cos(b.angle)*20, vy: Math.sin(b.angle)*20, team: 'CT', damage: 10});
+                playSound(150, 'sawtooth', 0.05, 0.02);
+            }
+        } else if (b.isAlerted && b.lastKnownPos) {
+            // Поиск: идет к последнему месту контакта[cite: 1]
+            let a = Math.atan2(b.lastKnownPos.y - b.y, b.lastKnownPos.x - b.x);
+            b.angle = a; 
+            b.x += Math.cos(a) * 3; 
+            b.y += Math.sin(a) * 3;
+            if (Math.hypot(b.x - b.lastKnownPos.x, b.y - b.lastKnownPos.y) < 20) b.isAlerted = false;
+        }
+        
+        // Смена стрейфа при ударе о стену[cite: 1]
+        if (checkWallCollision(b)) b.strafeDir *= -1;
+    });
+
+    bullets.forEach((b, i) => {
+        b.x += b.vx; b.y += b.vy;
+        walls.forEach(w => { if(b.x > w.x && b.x < w.x+w.w && b.y > w.y && b.y < w.y+w.h) bullets.splice(i,1); });
+        [player, ...entities].forEach(t => {
+            if(t.alive && t.team !== b.team && Math.hypot(b.x-t.x, b.y-t.y) < 25) {
+                t.hp -= b.damage; bullets.splice(i,1);
+                if(t === player) updateHUD();
+                if(t.hp <= 0) { 
+                    t.alive = false; 
+                    if(t !== player) { 
+                        player.money += 200; 
+                        if(player.money > bestScore) { 
+                            bestScore = player.money; 
+                            localStorage.setItem('crystalHighScore', bestScore); 
+                        } 
+                        updateHUD(); 
+                    } 
+                }
+            }
+        });
+    });
+
+    grenades.forEach((g, i) => {
+        g.x += g.vx; g.y += g.vy; g.vx *= 0.96; g.vy *= 0.96; g.timer--;
+        if(g.timer <= 0) {
+            playSound(60, 'triangle', 0.5, 0.3);
+            [player, ...entities].forEach(t => {
+                let dist = Math.hypot(g.x - t.x, g.y - t.y);
+                if(dist < 250) { t.hp -= (250 - dist) / 1.5; if(t.hp <= 0) t.alive = false; }
+            });
+            for(let j=0; j<15; j++) particles.push({x:g.x, y:g.y, vx:Math.random()*10-5, vy:Math.random()*10-5, life:30});
+            grenades.splice(i, 1); updateHUD();
+        }
+    });
+
+    if(player.hp <= 0) { running = false; alert("ВЫ ПОГИБЛИ!"); location.reload(); }
+    updateRadar();
+}
+
+function draw() {
+    ctx.fillStyle = "#050505"; ctx.fillRect(0,0,canvas.width,canvas.height);
+    ctx.save();
+    ctx.translate(canvas.width/2 - player.x, canvas.height/2 - player.y);
+    ctx.fillStyle = "#1a1a1a"; walls.forEach(w => ctx.fillRect(w.x, w.y, w.w, w.h));
+    [player, ...entities].forEach(e => {
+        if(!e.alive) return;
+        ctx.save(); ctx.translate(e.x, e.y); ctx.rotate(e.angle);
+        ctx.fillStyle = e.team === 'T' ? "#00d4ff" : "#ff4444";
+        ctx.beginPath(); ctx.arc(0, 0, e.radius, 0, 7); ctx.fill();
+        ctx.fillStyle = "#fff"; ctx.fillRect(10, -3, 20, 6); ctx.restore();
+    });
+    ctx.fillStyle = "#ff9d00"; grenades.forEach(g => { ctx.beginPath(); ctx.arc(g.x, g.y, 8, 0, 7); ctx.fill(); });
+    ctx.fillStyle = "#fff700"; bullets.forEach(b => ctx.fillRect(b.x-2, b.y-2, 5, 5));
+    ctx.fillStyle = "#ff4400"; particles.forEach((p, i) => { ctx.fillRect(p.x, p.y, 4, 4); p.x+=p.vx; p.y+=p.vy; p.life--; if(p.life<=0) particles.splice(i, 1); });
+    ctx.restore();
+}
+
+function updateHUD() {
+    document.getElementById("money").innerText = player.money;
+    document.getElementById("hp-val").innerText = Math.ceil(player.hp);
+    document.getElementById("gren-val").innerText = player.grenades;
+    document.getElementById("weapon-display").innerText = WEAPONS[player.weapon].name;
+    document.getElementById("shop-money").innerText = "$" + player.money;
+    document.getElementById('best-score').innerText = bestScore;
+}
+
+function toggleShop() { if(!player.alive) return; isShopOpen = !isShopOpen; document.getElementById("shop-ui").style.display = isShopOpen ? "flex" : "none"; }
+function buyItem(t) { if(t==='medkit' && player.money>=500){player.hp=100; player.money-=500;} if(t==='grenade'&&player.money>=400){player.grenades++; player.money-=400;} updateHUD(); }
+function buyWeapon(w) { 
+    let cost = w === 'ak47' ? 2500 : 3100;
+    if(player.money >= cost){ player.weapon=w; player.money-=cost; updateHUD(); toggleShop(); } 
+}
+
+window.onkeydown = e => { keys[e.code] = true; if(e.code === 'KeyB') toggleShop(); if(e.code === 'KeyG') throwGrenade(); };
+window.onkeyup = e => keys[e.code] = false;
+window.onmousedown = () => keys['MouseDown'] = true;
+window.onmouseup = () => keys['MouseDown'] = false;
+window.onmousemove = e => { if(!isShopOpen) player.angle = Math.atan2(e.clientY - canvas.height/2, e.clientX - canvas.width/2); };
+
+function loop() { if(running) { update(); draw(); requestAnimationFrame(loop); } }
+</script>
+</body>
+</html>
